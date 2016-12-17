@@ -1,0 +1,136 @@
+---
+title: "Machine Learning Final Project"
+author: "Brett Crosby"
+date: "15 December 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+setwd("~/../Git/Coursera/MachineLearning/Project")
+```
+
+## Executive Summary
+
+Using a supplied dataset, this project will develop a model that will predict which exercise was performed out of a set of 5 possibilities. Using the description from the course project:
+
+> "Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset)".
+
+## Processing
+Load the training and final validation data and review for completeness.
+
+```{r LoadData}
+# First, read in the data. There are two types of missing data (NAs, DIV/0 and "") so the import
+# process needs to deal with that. Once this is done the files import correctly with all 
+# variables coded correctly. Otherwise many variables get coded as factors incorrectly.
+
+naStrings <- c("#DIV/0!", "NA", "")
+
+data.in <- read.csv("data/pml-training.csv",
+                    header = TRUE,
+                    na.strings = naStrings)
+data.final <- read.csv("data/pml-testing.csv",
+                       header = TRUE,
+                       na.strings = naStrings)
+
+```
+
+The dataset has a large number of variables which makes the output from head(), str() and summary() to large to include here. Suffice to say that I have reviewed the data sets using these commands and have found that there are a great number of NA values which I'd like to remove from both the training and testing datasets. There are also timestamp and other columns that I don't want to use in the processing.
+
+```{r PreProcessData}
+# Run apply over the dataset to produce a vector of columns with all NA values
+naCols <- as.vector(apply(data.in, 2, function(x) sum(is.na(x))) > 0)
+# Remove those columns from the datasets.
+data.in <- data.in[, !naCols]
+data.final <- data.final[, !naCols]
+
+# Remove unwanted variables
+data.in <- data.in[, -c(1:7)]
+data.final <- data.final[, -c(1:7)]
+
+set.seed(276729)
+library(caret)
+correlationMatrix <- cor(data.in[, -53])
+# find attributes that are highly corrected (ideally >0.75)
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75)
+
+data.in <- data.in[, -highlyCorrelated]
+data.final <- data.final[, -highlyCorrelated]
+
+
+# Finally, remove Near-Zero-Variance predictors as these don't work well with ML Algorithms
+nzv <- nearZeroVar(data.in, saveMetrics = TRUE)
+if(length(nzv) > 0) {
+    data.in <- data.in[, nzv$nzv==FALSE]
+    data.final <- data.final[,nzv$nzv==FALSE]
+}
+
+```
+
+At the end of this processing we are left with data frames with 32 variables.  
+NOTE: I did consider if removing this many variables would be a problem. For other scenarios where I would do additional processing I may have chosen to keep the variables and simply mark the ones that I didn't want to use when necessary. This would allow me to recall these variables at a later stage. Again, for this exercise, a deliberate decision was made to simply remove the unnecessary variables.
+
+## Initial Model Building
+
+Next, split the training data into a training and test set to perform validation. We will use the final validation dataset once we have confirmed our model.
+
+```{r SplitData}
+inTrain <- createDataPartition(data.in$classe, p=.6, list = FALSE)
+data.train <- data.in[inTrain, ]
+data.test <- data.in[-inTrain, ]
+```
+
+Now build the Random Forest and GBM prediction models.
+
+```{r BuildModels}
+# Set parameters that will be used in building each model.
+trainCtrl <- trainControl(method = "boot", number = 15)
+# Build the models
+modRF <- train(classe ~ ., data = data.train, method = "rf",  trControl = trainCtrl)
+modGBM <- train(classe ~ ., data = data.train, method = "gbm", verbose = FALSE, trControl = trainCtrl)
+
+# Display the output from each model.
+modRF
+modGBM
+
+```
+
+Analyse the models to see the accuracy.
+
+```{r ModelAccuracy}
+predsRF <- predict(modRF, data.test)
+predsGBM <- predict(modGBM, data.test)
+
+cmRF <- confusionMatrix(predsRF, data.test$classe)
+cmGBM <- confusionMatrix(predsGBM, data.test$classe)
+
+cmRF
+cmGBM
+
+AccuracyResults <- data.frame(
+  Model = c('Random Forest', 'Gradient Boosted Method'),
+  Accuracy = rbind(cmRF$overall["Accuracy"], cmGBM$overall["Accuracy"])
+)
+AccuracyResults
+
+
+```
+
+## Discussion of Results
+
+Both models give accurate results with their predictions (99.01% and 94.21%) with the Random Forest model proving to be the most accurate. As a result, that is the model I will use to predict using the final data validation set.
+
+
+## Predictions
+
+Final step in the project is to predict the exercises against the validation dataset (data.final).
+
+```{r Predictions}
+finalPredictions <- predict(modRF, data.final)
+finalPredictions
+
+# Write the predictions to a file
+write.table(finalPredictions, file="data/predictions.txt", row.names = FALSE, col.names = FALSE)
+```
+
+This completes the Coursera Machine Learning project.
